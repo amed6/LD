@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Level Editor</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel standalone to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* Custom scrollbar for better aesthetics */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(156, 163, 175, 0.5); border-radius: 10px; }
+        .draggable { cursor: grab; }
+        .draggable:active { cursor: grabbing; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useRef, useEffect } = React;
+
+        // --- INITIAL DATA ---
+        const initialLevelData = {
+          TntBoxPositions: [{ x: 6.3, y: 1.0, z: 0.0 }],
+          TntBoxRotations: [{ x: 0.0, y: 0.0, z: 0.0 }],
+          isLevelFake: false,
+          groundPoints: [
+            { x: -7.0, y: -2.0 },
+            { x: -1.96, y: -2.1 },
+            { x: 4.3, y: -1.0 },
+            { x: 10.03, y: -1.5 }
+          ],
+          groundSurfaceColor: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
+          undergroundColor: { r: 0.3, g: 0.2, b: 0.2, a: 1.0 },
+          gradientColor: { r: 1.0, g: 1.0, b: 0.0, a: 1.0 },
+          groundSurfaceTextureIndex: 0,
+          playerCastlePosition: { x: -1.9, y: 0.0, z: 0.0 },
+          playerCastleRotation: { x: 0.0, y: 0.0, z: 0.0 },
+          enemyCastlePosition: { x: 5.6, y: 0.7, z: 0.0 },
+          enemyCastleRotation: { x: 0.0, y: 0.0, z: 0.0 },
+          playerBattleUnitCount: 2,
+          playerBattleUnitPositions: [
+            { x: -2.0, y: 0.0, z: 0.0 },
+            { x: -1.0, y: 0.0, z: 0.0 }
+          ],
+          playerBattleUnitBodyIndexes: [0, 0],
+          playerBattleUnitHealth: [100, 120],
+          enemyBattleUnitCount: 1,
+          enemyBattleUnitPositions: [{ x: 5.0, y: 0.0, z: 0.0 }],
+          enemyBattleUnitBodyIndexes: [1],
+          enemyBattleUnitHealth: [1],
+          playerProjectileIndex: 0,
+          playerProjectileCount: 3,
+          playerProjectileDestructionDamageFactor: 1.5,
+          playerProjectileHealthDamageFactor: 1.0,
+          enemyProjectileIndex: 1,
+          enemyProjectileCount: 2,
+          enemyProjectileDestructionDamageFactor: 1.2,
+          enemyProjectileHealthDamageFactor: 0.8,
+          enemyShootPositions: [
+            { x: -0.43, y: 0.2, z: 0.0 },
+            { x: -0.43, y: 4.0, z: 0.0 }
+          ]
+        };
+
+        // --- CONSTANTS ---
+        const PROJECTILES = [
+          { id: 0, name: "Cannonball" },
+          { id: 1, name: "Rocket" },
+          { id: 2, name: "Big Rocket" },
+          { id: 3, name: "Boumerang" }
+        ];
+
+        const UNIT_SPRITES = [
+          { id: 0, name: "Human-Blue", color: "#3b82f6" },
+          { id: 1, name: "Human-Red", color: "#ef4444" },
+          { id: 2, name: "Scientist", color: "#a855f7" },
+          { id: 3, name: "Skeleton", color: "#e5e7eb" },
+          { id: 4, name: "Cyclop", color: "#22c55e" }
+        ];
+
+        const GROUND_TEXTURES = [
+          { id: 0, name: "Texture Slot 1" },
+          { id: 1, name: "Texture Slot 2" }
+        ];
+
+        // Coordinate mapping for SVG Preview
+        const SVG_WIDTH = 800;
+        const SVG_HEIGHT = 400;
+        const round2 = (num) => Math.round(num * 100) / 100;
+
+        function App() {
+          const [level, setLevel] = useState(initialLevelData);
+          const [activeTab, setActiveTab] = useState('terrain');
+          const [copied, setCopied] = useState(false);
+
+          // JSON Editor State
+          const [jsonInput, setJsonInput] = useState(() => JSON.stringify(initialLevelData, null, 2));
+          const [jsonError, setJsonError] = useState(false);
+
+          // Keep JSON Editor in sync with UI changes
+          useEffect(() => {
+            setJsonInput(prev => {
+              try {
+                // Only update the text box if the data is functionally different 
+                // (prevents jumping cursor while typing valid JSON)
+                if (JSON.stringify(JSON.parse(prev)) !== JSON.stringify(level)) {
+                  return JSON.stringify(level, null, 2);
+                }
+                return prev;
+              } catch (e) {
+                // If text was invalid, but UI was interacted with, override with valid data
+                return JSON.stringify(level, null, 2);
+              }
+            });
+            setJsonError(false);
+          }, [level]);
+
+          // Handle manual typing in JSON Editor
+          const handleJsonChange = (e) => {
+            const val = e.target.value;
+            setJsonInput(val);
+            try {
+              const parsed = JSON.parse(val);
+              setLevel(parsed); // Valid! Update UI + visualizer
+              setJsonError(false);
+            } catch (err) {
+              setJsonError(true); // Invalid syntax, show warning
+            }
+          };
+
+          // View camera state
+          const [view, setView] = useState({ minX: -12, maxX: 15, minY: -6, maxY: 8 });
+
+          // Dynamic mapping functions based on current view
+          const mapX = (x) => ((x - view.minX) / (view.maxX - view.minX)) * SVG_WIDTH;
+          const mapY = (y) => SVG_HEIGHT - ((y - view.minY) / (view.maxY - view.minY)) * SVG_HEIGHT;
+          const mapW = (w) => w * (SVG_WIDTH / (view.maxX - view.minX));
+          const mapH = (h) => h * (SVG_HEIGHT / (view.maxY - view.minY));
+
+          const unmapX = (px) => (px / SVG_WIDTH) * (view.maxX - view.minX) + view.minX;
+          const unmapY = (py) => view.maxY - (py / SVG_HEIGHT) * (view.maxY - view.minY);
+
+          // SVG and Dragging Refs
+          const svgRef = useRef(null);
+          const dragRef = useRef({ isDragging: false });
+
+          // --- MOUSE EVENT HANDLERS ---
+          const getMouseGameCoords = (e) => {
+            const rect = svgRef.current.getBoundingClientRect();
+            const px = e.clientX - rect.left;
+            const py = e.clientY - rect.top;
+            return { x: unmapX(px), y: unmapY(py) };
+          };
+
+          const handleMouseDown = (e, type, index = null) => {
+            e.stopPropagation();
+            const coords = getMouseGameCoords(e);
+            dragRef.current = {
+              isDragging: true,
+              type,
+              index,
+              startX: coords.x,
+              startY: coords.y,
+              startClientX: e.clientX,
+              startClientY: e.clientY,
+              initialLevel: JSON.parse(JSON.stringify(level)), // Deep copy to calculate relative offsets
+              initialView: { ...view }
+            };
+          };
+
+          const handleMouseMove = (e) => {
+            if (!dragRef.current.isDragging) return;
+            
+            const coords = getMouseGameCoords(e);
+            const dx = coords.x - dragRef.current.startX;
+            const dy = coords.y - dragRef.current.startY;
+            const initial = dragRef.current.initialLevel;
+            const { type, index } = dragRef.current;
+
+            if (type === 'pan') {
+              const pixelDx = e.clientX - dragRef.current.startClientX;
+              const pixelDy = e.clientY - dragRef.current.startClientY;
+              
+              const gameWidth = dragRef.current.initialView.maxX - dragRef.current.initialView.minX;
+              const gameHeight = dragRef.current.initialView.maxY - dragRef.current.initialView.minY;
+              
+              const gameDx = (pixelDx / SVG_WIDTH) * gameWidth;
+              const gameDy = (pixelDy / SVG_HEIGHT) * gameHeight;
+
+              setView({
+                minX: dragRef.current.initialView.minX - gameDx,
+                maxX: dragRef.current.initialView.maxX - gameDx,
+                minY: dragRef.current.initialView.minY + gameDy,
+                maxY: dragRef.current.initialView.maxY + gameDy
+              });
+              return;
+            }
+
+            setLevel(prev => {
+              const next = { ...prev };
+
+              if (type === 'groundPoint') {
+                next.groundPoints = [...initial.groundPoints];
+                next.groundPoints[index] = {
+                  x: round2(initial.groundPoints[index].x + dx),
+                  y: round2(initial.groundPoints[index].y + dy)
+                };
+              } else if (type === 'playerCastle') {
+                next.playerCastlePosition = {
+                  ...initial.playerCastlePosition,
+                  x: round2(initial.playerCastlePosition.x + dx),
+                  y: round2(initial.playerCastlePosition.y + dy)
+                };
+                // Move units along with castle
+                next.playerBattleUnitPositions = initial.playerBattleUnitPositions.map(u => ({
+                  ...u, x: round2(u.x + dx), y: round2(u.y + dy)
+                }));
+              } else if (type === 'enemyCastle') {
+                next.enemyCastlePosition = {
+                  ...initial.enemyCastlePosition,
+                  x: round2(initial.enemyCastlePosition.x + dx),
+                  y: round2(initial.enemyCastlePosition.y + dy)
+                };
+                // Move units along with castle
+                next.enemyBattleUnitPositions = initial.enemyBattleUnitPositions.map(u => ({
+                  ...u, x: round2(u.x + dx), y: round2(u.y + dy)
+                }));
+              } else if (type === 'playerUnit') {
+                next.playerBattleUnitPositions = [...initial.playerBattleUnitPositions];
+                next.playerBattleUnitPositions[index] = {
+                  ...initial.playerBattleUnitPositions[index],
+                  x: round2(initial.playerBattleUnitPositions[index].x + dx),
+                  y: round2(initial.playerBattleUnitPositions[index].y + dy)
+                };
+              } else if (type === 'enemyUnit') {
+                next.enemyBattleUnitPositions = [...initial.enemyBattleUnitPositions];
+                next.enemyBattleUnitPositions[index] = {
+                  ...initial.enemyBattleUnitPositions[index],
+                  x: round2(initial.enemyBattleUnitPositions[index].x + dx),
+                  y: round2(initial.enemyBattleUnitPositions[index].y + dy)
+                };
+              } else if (type === 'tnt') {
+                next.TntBoxPositions = [...initial.TntBoxPositions];
+                next.TntBoxPositions[index] = {
+                  ...initial.TntBoxPositions[index],
+                  x: round2(initial.TntBoxPositions[index].x + dx),
+                  y: round2(initial.TntBoxPositions[index].y + dy)
+                };
+              } else if (type === 'playerCastleRotate') {
+                const angleRad = Math.atan2(coords.y - initial.playerCastlePosition.y, coords.x - initial.playerCastlePosition.x);
+                next.playerCastleRotation = { ...initial.playerCastleRotation, z: round2(angleRad * (180 / Math.PI)) };
+              } else if (type === 'enemyCastleRotate') {
+                const angleRad = Math.atan2(coords.y - initial.enemyCastlePosition.y, coords.x - initial.enemyCastlePosition.x);
+                next.enemyCastleRotation = { ...initial.enemyCastleRotation, z: round2(angleRad * (180 / Math.PI)) };
+              }
+
+              return next;
+            });
+          };
+
+          const handleMouseUp = () => {
+            if (dragRef.current.isDragging && dragRef.current.type === 'groundPoint') {
+              // Re-sort ground points to maintain valid polygon after dragging
+              setLevel(prev => ({
+                ...prev,
+                groundPoints: [...prev.groundPoints].sort((a, b) => a.x - b.x)
+              }));
+            }
+            dragRef.current = { isDragging: false };
+          };
+
+          const handleDoubleClick = (e) => {
+            const coords = getMouseGameCoords(e);
+            setLevel(prev => {
+              const newPoints = [...prev.groundPoints, { x: round2(coords.x), y: round2(coords.y) }];
+              newPoints.sort((a, b) => a.x - b.x); // Automatically sort by X
+              return { ...prev, groundPoints: newPoints };
+            });
+          };
+
+          const handleWheel = (e) => {
+            const rect = svgRef.current.getBoundingClientRect();
+            const px = e.clientX - rect.left;
+            const py = e.clientY - rect.top;
+
+            const mx = unmapX(px);
+            const my = unmapY(py);
+
+            // Use an exponential curve for smooth, far less sensitive zooming
+            const zoomFactor = Math.exp(e.deltaY * 0.001);
+            const newW = (view.maxX - view.minX) * zoomFactor;
+            const newH = (view.maxY - view.minY) * zoomFactor;
+
+            // Prevent extreme zoom out or zoom in limits
+            if (newW < 2 || newW > 300) return;
+
+            const newMinX = mx - (px / SVG_WIDTH) * newW;
+            const newMaxY = my + (py / SVG_HEIGHT) * newH;
+            const newMinY = newMaxY - newH;
+            const newMaxX = newMinX + newW;
+
+            setView({
+                minX: newMinX,
+                maxX: newMaxX,
+                minY: newMinY,
+                maxY: newMaxY
+            });
+          };
+
+          // --- STATE UPDATERS ---
+          const updateRoot = (key, value) => setLevel(prev => ({ ...prev, [key]: value }));
+
+          const updateColor = (colorKey, channel, value) => {
+            setLevel(prev => ({
+              ...prev,
+              [colorKey]: { ...prev[colorKey], [channel]: parseFloat(value) || 0 }
+            }));
+          };
+
+          const updateVector = (key, axis, value) => {
+            setLevel(prev => ({
+              ...prev,
+              [key]: { ...prev[key], [axis]: parseFloat(value) || 0 }
+            }));
+          };
+
+          const updateArrayPoint = (arrayKey, index, axis, value) => {
+            setLevel(prev => {
+              const newArr = [...prev[arrayKey]];
+              newArr[index] = { ...newArr[index], [axis]: parseFloat(value) || 0 };
+              
+              // Automatically sort ground points when manually updated from inputs
+              if(arrayKey === 'groundPoints') {
+                newArr.sort((a,b) => a.x - b.x);
+              }
+
+              return { ...prev, [arrayKey]: newArr };
+            });
+          };
+
+          const addGroundPoint = () => {
+            setLevel(prev => {
+              const newPoints = [...prev.groundPoints, { x: 0, y: 0 }];
+              newPoints.sort((a,b) => a.x - b.x);
+              return { ...prev, groundPoints: newPoints };
+            });
+          };
+
+          const removeGroundPoint = (index) => setLevel(prev => ({ ...prev, groundPoints: prev.groundPoints.filter((_, i) => i !== index) }));
+
+          const addTnt = () => setLevel(prev => ({
+            ...prev,
+            TntBoxPositions: [...prev.TntBoxPositions, { x: 0, y: 0, z: 0 }],
+            TntBoxRotations: [...prev.TntBoxRotations, { x: 0, y: 0, z: 0 }]
+          }));
+
+          const removeTnt = (index) => setLevel(prev => ({
+            ...prev,
+            TntBoxPositions: prev.TntBoxPositions.filter((_, i) => i !== index),
+            TntBoxRotations: prev.TntBoxRotations.filter((_, i) => i !== index)
+          }));
+
+          const addUnit = (type) => {
+            const isPlayer = type === 'player';
+            const prefix = isPlayer ? 'playerBattleUnit' : 'enemyBattleUnit';
+            setLevel(prev => ({
+              ...prev,
+              [`${prefix}Count`]: prev[`${prefix}Count`] + 1,
+              [`${prefix}Positions`]: [...prev[`${prefix}Positions`], { x: 0, y: 0, z: 0 }],
+              [`${prefix}BodyIndexes`]: [...prev[`${prefix}BodyIndexes`], isPlayer ? 0 : 1],
+              [`${prefix}Health`]: [...prev[`${prefix}Health`], 100]
+            }));
+          };
+
+          const updateUnit = (type, index, field, value) => {
+            const prefix = type === 'player' ? 'playerBattleUnit' : 'enemyBattleUnit';
+            setLevel(prev => {
+              const newArr = [...prev[`${prefix}${field}`]];
+              if (field === 'Positions') {
+                newArr[index] = { ...newArr[index], ...value };
+              } else {
+                newArr[index] = field === 'Health' ? parseInt(value) || 0 : parseInt(value);
+              }
+              return { ...prev, [`${prefix}${field}`]: newArr };
+            });
+          };
+
+          const removeUnit = (type, index) => {
+            const prefix = type === 'player' ? 'playerBattleUnit' : 'enemyBattleUnit';
+            setLevel(prev => ({
+              ...prev,
+              [`${prefix}Count`]: Math.max(0, prev[`${prefix}Count`] - 1),
+              [`${prefix}Positions`]: prev[`${prefix}Positions`].filter((_, i) => i !== index),
+              [`${prefix}BodyIndexes`]: prev[`${prefix}BodyIndexes`].filter((_, i) => i !== index),
+              [`${prefix}Health`]: prev[`${prefix}Health`].filter((_, i) => i !== index)
+            }));
+          };
+
+          const addEnemyShootPos = () => setLevel(prev => ({ ...prev, enemyShootPositions: [...prev.enemyShootPositions, { x: 0, y: 0, z: 0 }] }));
+          const removeEnemyShootPos = (index) => setLevel(prev => ({ ...prev, enemyShootPositions: prev.enemyShootPositions.filter((_, i) => i !== index) }));
+
+          const handleExport = () => {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(level, null, 2));
+            const downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.setAttribute("href",     dataStr);
+            downloadAnchorNode.setAttribute("download", "level_data.json");
+            document.body.appendChild(downloadAnchorNode);
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+          };
+
+          const handleCopy = () => {
+            const textToCopy = jsonInput; // Copy exact contents of text area
+            const textArea = document.createElement("textarea");
+            textArea.value = textToCopy;
+            document.body.appendChild(textArea);
+            textArea.select();
+            try {
+              document.execCommand('copy');
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            } catch (err) {
+              console.error('Failed to copy', err);
+            }
+            document.body.removeChild(textArea);
+          };
+
+          // --- UI COMPONENTS ---
+          const InputGroup = ({ label, children }) => (
+            <div className="mb-4">
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">{label}</label>
+              {children}
+            </div>
+          );
+
+          const VectorInput = ({ label, value, onChange, hideZ }) => (
+            <div className="flex gap-2 items-center mb-2">
+              <span className="w-16 text-sm text-gray-700">{label}</span>
+              <input type="number" step="0.1" value={value.x} onChange={(e) => onChange('x', e.target.value)} className="w-20 p-1 border rounded text-sm" placeholder="X" />
+              <input type="number" step="0.1" value={value.y} onChange={(e) => onChange('y', e.target.value)} className="w-20 p-1 border rounded text-sm" placeholder="Y" />
+              {!hideZ && <input type="number" step="0.1" value={value.z} onChange={(e) => onChange('z', e.target.value)} className="w-20 p-1 border rounded text-sm" placeholder="Z" />}
+            </div>
+          );
+
+          const ColorInput = ({ label, color, onChange }) => (
+            <div className="flex gap-2 items-center mb-2">
+              <span className="w-24 text-sm text-gray-700 truncate">{label}</span>
+              {['r', 'g', 'b', 'a'].map(channel => (
+                <div key={channel} className="flex flex-col items-center">
+                  <span className="text-xs text-gray-400 uppercase">{channel}</span>
+                  <input type="number" step="0.1" min="0" max="1" value={color[channel]} onChange={(e) => onChange(channel, e.target.value)} className="w-14 p-1 border rounded text-sm" />
+                </div>
+              ))}
+              <div 
+                className="w-8 h-8 rounded border ml-2" 
+                style={{ backgroundColor: `rgba(${color.r*255}, ${color.g*255}, ${color.b*255}, ${color.a})` }}
+              />
+            </div>
+          );
+
+          // Calculate grid lines for current view
+          const gridX = [];
+          for (let i = Math.floor(view.minX); i <= Math.ceil(view.maxX); i++) gridX.push(i);
+          const gridY = [];
+          for (let i = Math.floor(view.minY); i <= Math.ceil(view.maxY); i++) gridY.push(i);
+
+          const generateGroundPath = () => {
+            const pts = level.groundPoints;
+            if (pts.length < 2) return '';
+            
+            const bottomY = view.minY - (view.maxY - view.minY); // Extend downwards
+            let d = `M ${mapX(pts[0].x)} ${mapY(bottomY)} L ${mapX(pts[0].x)} ${mapY(pts[0].y)}`;
+            
+            for (let i = 0; i < pts.length - 1; i++) {
+              const p0 = i === 0 ? pts[i] : pts[i - 1];
+              const p1 = pts[i];
+              const p2 = pts[i + 1];
+              const p3 = i === pts.length - 2 ? pts[i + 1] : pts[i + 2];
+              
+              // Tension parameter for Catmull-Rom spline (smooth curves)
+              const t = 0.25; 
+              
+              const cp1x = p1.x + (p2.x - p0.x) * t;
+              const cp1y = p1.y + (p2.y - p0.y) * t;
+              const cp2x = p2.x - (p3.x - p1.x) * t;
+              const cp2y = p2.y - (p3.y - p1.y) * t;
+              
+              d += ` C ${mapX(cp1x)} ${mapY(cp1y)}, ${mapX(cp2x)} ${mapY(cp2y)}, ${mapX(p2.x)} ${mapY(p2.y)}`;
+            }
+            
+            d += ` L ${mapX(pts[pts.length - 1].x)} ${mapY(bottomY)} Z`;
+            return d;
+          };
+
+          return (
+            <div className="flex h-screen bg-gray-100 font-sans overflow-hidden">
+              
+              {/* SIDEBAR EDITOR */}
+              <div className="w-[450px] bg-white border-r border-gray-200 flex flex-col h-full shadow-lg z-10 shrink-0">
+                <div className="p-4 bg-slate-800 text-white flex justify-between items-center shrink-0">
+                  <h1 className="text-xl font-bold">Level Editor</h1>
+                  <div className="flex gap-2">
+                    <button onClick={handleCopy} className="bg-blue-500 hover:bg-blue-400 px-3 py-1.5 rounded text-sm font-semibold transition shadow-md">
+                      {copied ? 'Copied!' : 'Copy'}
+                    </button>
+                    <button onClick={handleExport} className="bg-emerald-500 hover:bg-emerald-600 px-3 py-1.5 rounded text-sm font-semibold transition shadow-md">
+                      Export
+                    </button>
+                  </div>
+                </div>
+
+                {/* Tabs */}
+                <div className="flex border-b border-gray-200 text-sm overflow-x-auto shrink-0">
+                  {['terrain', 'structures', 'units', 'projectiles'].map(tab => (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      className={`px-4 py-3 font-medium capitalize whitespace-nowrap ${activeTab === tab ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-500 hover:bg-gray-50'}`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                  
+                  {/* TERRAIN TAB */}
+                  {activeTab === 'terrain' && (
+                    <div className="space-y-6">
+                      <div className="flex items-center gap-2 mb-4">
+                        <input type="checkbox" id="fakeLevel" checked={level.isLevelFake} onChange={(e) => updateRoot('isLevelFake', e.target.checked)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500" />
+                        <label htmlFor="fakeLevel" className="text-sm font-medium text-gray-700">Is Level Fake?</label>
+                      </div>
+
+                      <InputGroup label="Ground Settings">
+                        <select 
+                          value={level.groundSurfaceTextureIndex} 
+                          onChange={(e) => updateRoot('groundSurfaceTextureIndex', parseInt(e.target.value))}
+                          className="w-full p-2 border rounded mb-3 text-sm"
+                        >
+                          {GROUND_TEXTURES.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        </select>
+                        <ColorInput label="Surface" color={level.groundSurfaceColor} onChange={(c, v) => updateColor('groundSurfaceColor', c, v)} />
+                        <ColorInput label="Underground" color={level.undergroundColor} onChange={(c, v) => updateColor('undergroundColor', c, v)} />
+                        <ColorInput label="Gradient" color={level.gradientColor} onChange={(c, v) => updateColor('gradientColor', c, v)} />
+                      </InputGroup>
+
+                      <InputGroup label={`Ground Points (${level.groundPoints.length})`}>
+                        <div className="space-y-2 mb-2 bg-gray-50 p-3 rounded border">
+                          {level.groundPoints.map((pt, i) => (
+                            <div key={i} className="flex gap-2 items-center">
+                              <span className="w-6 text-xs text-gray-500">#{i}</span>
+                              <input type="number" step="0.1" value={pt.x} onChange={(e) => updateArrayPoint('groundPoints', i, 'x', e.target.value)} className="w-20 p-1 border rounded text-sm" placeholder="X" />
+                              <input type="number" step="0.1" value={pt.y} onChange={(e) => updateArrayPoint('groundPoints', i, 'y', e.target.value)} className="w-20 p-1 border rounded text-sm" placeholder="Y" />
+                              <button onClick={() => removeGroundPoint(i)} className="text-red-500 hover:text-red-700 text-sm font-bold px-2">×</button>
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={addGroundPoint} className="text-sm bg-blue-50 text-blue-600 px-3 py-1.5 rounded hover:bg-blue-100 border border-blue-200 w-full">+ Add Ground Point</button>
+                      </InputGroup>
+                    </div>
+                  )}
+
+                  {/* STRUCTURES TAB */}
+                  {activeTab === 'structures' && (
+                    <div className="space-y-6">
+                      <InputGroup label="Player Castle">
+                        <VectorInput label="Position" value={level.playerCastlePosition} onChange={(axis, val) => updateVector('playerCastlePosition', axis, val)} />
+                        <VectorInput label="Rotation" value={level.playerCastleRotation} onChange={(axis, val) => updateVector('playerCastleRotation', axis, val)} />
+                      </InputGroup>
+                      
+                      <div className="h-px bg-gray-200 my-4" />
+
+                      <InputGroup label="Enemy Castle">
+                        <VectorInput label="Position" value={level.enemyCastlePosition} onChange={(axis, val) => updateVector('enemyCastlePosition', axis, val)} />
+                        <VectorInput label="Rotation" value={level.enemyCastleRotation} onChange={(axis, val) => updateVector('enemyCastleRotation', axis, val)} />
+                      </InputGroup>
+
+                      <div className="h-px bg-gray-200 my-4" />
+
+                      <InputGroup label={`TNT Boxes (${level.TntBoxPositions.length})`}>
+                        <div className="space-y-4 mb-2">
+                          {level.TntBoxPositions.map((pos, i) => (
+                            <div key={i} className="bg-orange-50 p-3 rounded border border-orange-200 relative">
+                              <button onClick={() => removeTnt(i)} className="absolute top-2 right-2 text-red-500 hover:text-red-700 text-lg font-bold">×</button>
+                              <h4 className="text-xs font-bold text-orange-800 mb-2 uppercase">TNT Box #{i}</h4>
+                              <VectorInput label="Pos" value={pos} onChange={(axis, val) => updateArrayPoint('TntBoxPositions', i, axis, val)} />
+                              <VectorInput label="Rot" value={level.TntBoxRotations[i]} onChange={(axis, val) => updateArrayPoint('TntBoxRotations', i, axis, val)} />
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={addTnt} className="text-sm bg-orange-100 text-orange-700 px-3 py-1.5 rounded hover:bg-orange-200 border border-orange-300 w-full">+ Add TNT Box</button>
+                      </InputGroup>
+                    </div>
+                  )}
+
+                  {/* UNITS TAB */}
+                  {activeTab === 'units' && (
+                    <div className="space-y-6">
+                      
+                      {/* Player Units */}
+                      <InputGroup label={`Player Units (${level.playerBattleUnitCount})`}>
+                        <div className="space-y-3 mb-2">
+                          {level.playerBattleUnitPositions.map((pos, i) => (
+                            <div key={i} className="bg-blue-50 p-3 rounded border border-blue-200 relative">
+                              <button onClick={() => removeUnit('player', i)} className="absolute top-2 right-2 text-red-500 hover:text-red-700 text-lg font-bold">×</button>
+                              <div className="flex gap-2 items-center mb-2">
+                                <select 
+                                  value={level.playerBattleUnitBodyIndexes[i]} 
+                                  onChange={(e) => updateUnit('player', i, 'BodyIndexes', e.target.value)}
+                                  className="flex-1 p-1.5 border rounded text-sm bg-white"
+                                >
+                                  {UNIT_SPRITES.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                </select>
+                                <input 
+                                  type="number" 
+                                  value={level.playerBattleUnitHealth[i]} 
+                                  onChange={(e) => updateUnit('player', i, 'Health', e.target.value)}
+                                  className="w-20 p-1.5 border rounded text-sm bg-white" 
+                                  placeholder="HP" 
+                                  title="Health"
+                                />
+                              </div>
+                              <VectorInput label="Pos" value={pos} onChange={(axis, val) => updateUnit('player', i, 'Positions', { [axis]: parseFloat(val)||0 })} />
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={() => addUnit('player')} className="text-sm bg-blue-100 text-blue-700 px-3 py-1.5 rounded hover:bg-blue-200 border border-blue-300 w-full">+ Add Player Unit</button>
+                      </InputGroup>
+
+                      <div className="h-px bg-gray-200 my-4" />
+
+                      {/* Enemy Units */}
+                      <InputGroup label={`Enemy Units (${level.enemyBattleUnitCount})`}>
+                        <div className="space-y-3 mb-2">
+                          {level.enemyBattleUnitPositions.map((pos, i) => (
+                            <div key={i} className="bg-red-50 p-3 rounded border border-red-200 relative">
+                              <button onClick={() => removeUnit('enemy', i)} className="absolute top-2 right-2 text-red-500 hover:text-red-700 text-lg font-bold">×</button>
+                              <div className="flex gap-2 items-center mb-2">
+                                <select 
+                                  value={level.enemyBattleUnitBodyIndexes[i]} 
+                                  onChange={(e) => updateUnit('enemy', i, 'BodyIndexes', e.target.value)}
+                                  className="flex-1 p-1.5 border rounded text-sm bg-white"
+                                >
+                                  {UNIT_SPRITES.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                </select>
+                                <input 
+                                  type="number" 
+                                  value={level.enemyBattleUnitHealth[i]} 
+                                  onChange={(e) => updateUnit('enemy', i, 'Health', e.target.value)}
+                                  className="w-20 p-1.5 border rounded text-sm bg-white" 
+                                  placeholder="HP" 
+                                  title="Health"
+                                />
+                              </div>
+                              <VectorInput label="Pos" value={pos} onChange={(axis, val) => updateUnit('enemy', i, 'Positions', { [axis]: parseFloat(val)||0 })} />
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={() => addUnit('enemy')} className="text-sm bg-red-100 text-red-700 px-3 py-1.5 rounded hover:bg-red-200 border border-red-300 w-full">+ Add Enemy Unit</button>
+                      </InputGroup>
+
+                    </div>
+                  )}
+
+                  {/* PROJECTILES TAB */}
+                  {activeTab === 'projectiles' && (
+                    <div className="space-y-6">
+                      
+                      <InputGroup label="Player Projectiles">
+                        <div className="bg-gray-50 p-3 rounded border space-y-3">
+                          <div className="flex gap-2">
+                            <div className="flex-1">
+                              <label className="text-xs text-gray-500 block">Type</label>
+                              <select value={level.playerProjectileIndex} onChange={e => updateRoot('playerProjectileIndex', parseInt(e.target.value))} className="w-full p-1.5 border rounded text-sm">
+                                {PROJECTILES.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                              </select>
+                            </div>
+                            <div className="w-20">
+                              <label className="text-xs text-gray-500 block">Count</label>
+                              <input type="number" value={level.playerProjectileCount} onChange={e => updateRoot('playerProjectileCount', parseInt(e.target.value)||0)} className="w-full p-1.5 border rounded text-sm" />
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                             <div className="flex-1">
+                              <label className="text-xs text-gray-500 block">Destruction Dmg</label>
+                              <input type="number" step="0.1" value={level.playerProjectileDestructionDamageFactor} onChange={e => updateRoot('playerProjectileDestructionDamageFactor', parseFloat(e.target.value)||0)} className="w-full p-1.5 border rounded text-sm" />
+                            </div>
+                             <div className="flex-1">
+                              <label className="text-xs text-gray-500 block">Health Dmg</label>
+                              <input type="number" step="0.1" value={level.playerProjectileHealthDamageFactor} onChange={e => updateRoot('playerProjectileHealthDamageFactor', parseFloat(e.target.value)||0)} className="w-full p-1.5 border rounded text-sm" />
+                            </div>
+                          </div>
+                        </div>
+                      </InputGroup>
+
+                      <InputGroup label="Enemy Projectiles">
+                        <div className="bg-gray-50 p-3 rounded border space-y-3">
+                          <div className="flex gap-2">
+                            <div className="flex-1">
+                              <label className="text-xs text-gray-500 block">Type</label>
+                              <select value={level.enemyProjectileIndex} onChange={e => updateRoot('enemyProjectileIndex', parseInt(e.target.value))} className="w-full p-1.5 border rounded text-sm">
+                                {PROJECTILES.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                              </select>
+                            </div>
+                            <div className="w-20">
+                              <label className="text-xs text-gray-500 block">Count</label>
+                              <input type="number" value={level.enemyProjectileCount} onChange={e => updateRoot('enemyProjectileCount', parseInt(e.target.value)||0)} className="w-full p-1.5 border rounded text-sm" />
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                             <div className="flex-1">
+                              <label className="text-xs text-gray-500 block">Destruction Dmg</label>
+                              <input type="number" step="0.1" value={level.enemyProjectileDestructionDamageFactor} onChange={e => updateRoot('enemyProjectileDestructionDamageFactor', parseFloat(e.target.value)||0)} className="w-full p-1.5 border rounded text-sm" />
+                            </div>
+                             <div className="flex-1">
+                              <label className="text-xs text-gray-500 block">Health Dmg</label>
+                              <input type="number" step="0.1" value={level.enemyProjectileHealthDamageFactor} onChange={e => updateRoot('enemyProjectileHealthDamageFactor', parseFloat(e.target.value)||0)} className="w-full p-1.5 border rounded text-sm" />
+                            </div>
+                          </div>
+                        </div>
+                      </InputGroup>
+
+                      <div className="h-px bg-gray-200 my-4" />
+
+                      <InputGroup label={`Rigged Enemy Shots (${level.enemyShootPositions.length})`}>
+                        <div className="space-y-2 mb-2 bg-purple-50 p-3 rounded border border-purple-200">
+                          {level.enemyShootPositions.map((pos, i) => (
+                            <div key={i} className="flex gap-2 items-center relative pr-6">
+                              <span className="w-6 text-xs text-purple-700 font-bold">#{i}</span>
+                              <VectorInput label="" hideZ={false} value={pos} onChange={(axis, val) => updateArrayPoint('enemyShootPositions', i, axis, val)} />
+                              <button onClick={() => removeEnemyShootPos(i)} className="absolute right-0 text-red-500 hover:text-red-700 text-lg font-bold">×</button>
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={addEnemyShootPos} className="text-sm bg-purple-100 text-purple-700 px-3 py-1.5 rounded hover:bg-purple-200 border border-purple-300 w-full">+ Add Target Coordinate</button>
+                      </InputGroup>
+
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* MAIN VIEW AREA */}
+              <div className="flex-1 flex flex-col bg-slate-900 relative h-full overflow-hidden">
+                
+                {/* VISUAL PREVIEW */}
+                <div 
+                  className="h-1/2 border-b border-slate-700 relative overflow-hidden flex justify-center items-center bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-slate-800 shrink-0"
+                >
+                  <div className="absolute top-4 left-4 text-slate-400 text-sm font-semibold tracking-wider uppercase z-10 bg-slate-900/50 px-3 py-1 rounded pointer-events-none">
+                    Live Game Preview <span className="text-xs lowercase ml-2 text-slate-500">(Scroll to Zoom, Drag bg to Pan)</span>
+                  </div>
+                  
+                  <svg 
+                    ref={svgRef}
+                    width={SVG_WIDTH} height={SVG_HEIGHT} 
+                    className="bg-sky-200 shadow-2xl rounded-lg overflow-hidden border border-slate-600 cursor-grab active:cursor-grabbing"
+                    onMouseDown={(e) => handleMouseDown(e, 'pan')}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                    onDoubleClick={handleDoubleClick}
+                    onWheel={handleWheel}
+                  >
+                    {/* Grid Lines */}
+                    <g stroke="rgba(255,255,255,0.2)" strokeWidth="1" className="pointer-events-none">
+                      {gridX.map(x => <line key={`gx_${x}`} x1={mapX(x)} y1={0} x2={mapX(x)} y2={SVG_HEIGHT} />)}
+                      {gridY.map(y => <line key={`gy_${y}`} x1={0} y1={mapY(y)} x2={SVG_WIDTH} y2={mapY(y)} />)}
+                    </g>
+
+                    {/* Smooth Ground Path (Spline) */}
+                    {level.groundPoints.length >= 2 && (
+                      <path 
+                        d={generateGroundPath()}
+                        fill={`rgba(${level.groundSurfaceColor.r*255},${level.groundSurfaceColor.g*255},${level.groundSurfaceColor.b*255},${level.groundSurfaceColor.a})`}
+                        stroke={`rgba(${level.gradientColor.r*255},${level.gradientColor.g*255},${level.gradientColor.b*255},0.8)`}
+                        strokeWidth="4"
+                        className="pointer-events-none"
+                      />
+                    )}
+                    
+                    {/* Ground Points markers */}
+                    {level.groundPoints.map((p, i) => (
+                      <circle 
+                        key={`gp_${i}`} 
+                        cx={mapX(p.x)} cy={mapY(p.y)} r="6" 
+                        fill="white" stroke="black" strokeWidth="2"
+                        className="draggable"
+                        onMouseDown={(e) => handleMouseDown(e, 'groundPoint', i)}
+                      />
+                    ))}
+
+                    {/* Player Castle (4x6, pivot middle) */}
+                    <g transform={`translate(${mapX(level.playerCastlePosition.x)}, ${mapY(level.playerCastlePosition.y)}) rotate(${-level.playerCastleRotation.z})`}>
+                      {/* Main Draggable Body */}
+                      <g className="draggable" onMouseDown={(e) => handleMouseDown(e, 'playerCastle')}>
+                        <rect x={-mapW(4)/2} y={-mapH(6)/2} width={mapW(4)} height={mapH(6)} fill="#3b82f6" stroke="#1e3a8a" strokeWidth="2" rx="4" />
+                        <text x="0" y="4" fontSize="14" textAnchor="middle" fill="#fff" fontWeight="bold" className="pointer-events-none">P1 Base</text>
+                      </g>
+                      {/* Rotation Handle */}
+                      <g className="cursor-pointer" onMouseDown={(e) => handleMouseDown(e, 'playerCastleRotate')}>
+                        <line x1={mapW(4)/2} y1="0" x2={mapW(4)/2 + 25} y2="0" stroke="#fff" strokeWidth="2" strokeDasharray="4,4" />
+                        <circle cx={mapW(4)/2 + 25} cy="0" r="8" fill="#fbbf24" stroke="#d97706" strokeWidth="2" />
+                      </g>
+                    </g>
+
+                    {/* Enemy Castle (4x6, pivot middle) */}
+                    <g transform={`translate(${mapX(level.enemyCastlePosition.x)}, ${mapY(level.enemyCastlePosition.y)}) rotate(${-level.enemyCastleRotation.z})`}>
+                      {/* Main Draggable Body */}
+                      <g className="draggable" onMouseDown={(e) => handleMouseDown(e, 'enemyCastle')}>
+                        <rect x={-mapW(4)/2} y={-mapH(6)/2} width={mapW(4)} height={mapH(6)} fill="#ef4444" stroke="#7f1d1d" strokeWidth="2" rx="4" />
+                        <text x="0" y="4" fontSize="14" textAnchor="middle" fill="#fff" fontWeight="bold" className="pointer-events-none">E1 Base</text>
+                      </g>
+                      {/* Rotation Handle */}
+                      <g className="cursor-pointer" onMouseDown={(e) => handleMouseDown(e, 'enemyCastleRotate')}>
+                        <line x1={mapW(4)/2} y1="0" x2={mapW(4)/2 + 25} y2="0" stroke="#fff" strokeWidth="2" strokeDasharray="4,4" />
+                        <circle cx={mapW(4)/2 + 25} cy="0" r="8" fill="#fbbf24" stroke="#d97706" strokeWidth="2" />
+                      </g>
+                    </g>
+
+                    {/* TNT Boxes */}
+                    {level.TntBoxPositions.map((tnt, i) => (
+                      <g 
+                        key={`tnt_${i}`} 
+                        transform={`translate(${mapX(tnt.x)}, ${mapY(tnt.y)}) rotate(${-level.TntBoxRotations[i].z})`} 
+                        className="draggable"
+                        onMouseDown={(e) => handleMouseDown(e, 'tnt', i)}
+                      >
+                        {/* Invisible hit box to make dragging small objects easier */}
+                        <rect x="-15" y="-25" width="30" height="30" fill="transparent" />
+                        <rect x="-10" y="-20" width="20" height="20" fill="#f97316" stroke="#c2410c" strokeWidth="2" className="pointer-events-none" />
+                        <text x="0" y="-6" fontSize="10" textAnchor="middle" fill="#fff" fontWeight="bold" className="pointer-events-none">TNT</text>
+                      </g>
+                    ))}
+
+                    {/* Player Units (0.2x0.4, pivot bottom) */}
+                    {level.playerBattleUnitPositions.map((pos, i) => {
+                      const sprite = UNIT_SPRITES.find(s => s.id === level.playerBattleUnitBodyIndexes[i]) || UNIT_SPRITES[0];
+                      return (
+                        <g 
+                          key={`pu_${i}`} 
+                          className="draggable"
+                          onMouseDown={(e) => handleMouseDown(e, 'playerUnit', i)}
+                        >
+                          {/* Invisible hit box to make it easier to click small units */}
+                          <rect 
+                            x={mapX(pos.x) - 15} y={mapY(pos.y) - 30} width="30" height="30" fill="transparent"
+                          />
+                          <rect 
+                            x={mapX(pos.x) - mapW(0.2)/2} 
+                            y={mapY(pos.y) - mapH(0.4)} 
+                            width={mapW(0.2)} height={mapH(0.4)} 
+                            fill={sprite.color} stroke="#fff" strokeWidth="1" rx="1" 
+                            className="pointer-events-none"
+                          />
+                          <text x={mapX(pos.x)} y={mapY(pos.y) - mapH(0.4) - 4} fontSize="8" textAnchor="middle" fill="#1e3a8a" fontWeight="bold" className="pointer-events-none">{level.playerBattleUnitHealth[i]}</text>
+                        </g>
+                      )
+                    })}
+
+                    {/* Enemy Units (0.2x0.4, pivot bottom) */}
+                    {level.enemyBattleUnitPositions.map((pos, i) => {
+                      const sprite = UNIT_SPRITES.find(s => s.id === level.enemyBattleUnitBodyIndexes[i]) || UNIT_SPRITES[1];
+                      return (
+                        <g 
+                          key={`eu_${i}`} 
+                          className="draggable"
+                          onMouseDown={(e) => handleMouseDown(e, 'enemyUnit', i)}
+                        >
+                          {/* Invisible hit box to make it easier to click small units */}
+                          <rect 
+                            x={mapX(pos.x) - 15} y={mapY(pos.y) - 30} width="30" height="30" fill="transparent"
+                          />
+                          <rect 
+                            x={mapX(pos.x) - mapW(0.2)/2} 
+                            y={mapY(pos.y) - mapH(0.4)} 
+                            width={mapW(0.2)} height={mapH(0.4)} 
+                            fill={sprite.color} stroke="#fff" strokeWidth="1" rx="1" 
+                            className="pointer-events-none"
+                          />
+                          <text x={mapX(pos.x)} y={mapY(pos.y) - mapH(0.4) - 4} fontSize="8" textAnchor="middle" fill="#7f1d1d" fontWeight="bold" className="pointer-events-none">{level.enemyBattleUnitHealth[i]}</text>
+                        </g>
+                      )
+                    })}
+
+                    {/* Enemy Shoot Targets */}
+                    {level.enemyShootPositions.map((pos, i) => (
+                      <g key={`es_${i}`} className="pointer-events-none">
+                        <circle cx={mapX(pos.x)} cy={mapY(pos.y)} r="6" fill="none" stroke="#a855f7" strokeWidth="2" strokeDasharray="2,2" />
+                        <line x1={mapX(pos.x)-10} y1={mapY(pos.y)} x2={mapX(pos.x)+10} y2={mapY(pos.y)} stroke="#a855f7" strokeWidth="1" />
+                        <line x1={mapX(pos.x)} y1={mapY(pos.y)-10} x2={mapX(pos.x)} y2={mapY(pos.y)+10} stroke="#a855f7" strokeWidth="1" />
+                      </g>
+                    ))}
+                  </svg>
+                </div>
+
+                {/* JSON RAW PREVIEW */}
+                <div className="h-1/2 p-6 flex flex-col bg-slate-900 text-slate-300">
+                  <div className="flex justify-between items-center mb-2 shrink-0">
+                    <h2 className="text-sm font-bold tracking-widest uppercase text-slate-500 flex items-center gap-3">
+                      Live JSON Output
+                      {jsonError && (
+                        <span className="text-red-400 normal-case text-xs tracking-normal font-medium bg-red-500/10 border border-red-500/20 px-2 py-0.5 rounded">
+                          Invalid JSON format
+                        </span>
+                      )}
+                    </h2>
+                  </div>
+                  <textarea
+                    value={jsonInput}
+                    onChange={handleJsonChange}
+                    spellCheck="false"
+                    className={`flex-1 w-full bg-slate-950 rounded-lg p-4 overflow-auto border ${
+                      jsonError ? 'border-red-500/50 focus:border-red-500' : 'border-slate-800 focus:border-slate-600'
+                    } font-mono text-sm text-emerald-400 custom-scrollbar outline-none resize-none transition-colors`}
+                  />
+                </div>
+
+              </div>
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
